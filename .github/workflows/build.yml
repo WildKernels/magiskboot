@@ -59,6 +59,18 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Add rust-src for ONDK toolchain
+        shell: bash
+        run: |
+          rustup component add rust-src --toolchain nightly --target x86_64-unknown-linux-gnu || true
+          # ONDK rust is at $ANDROID_HOME/ndk/magisk/toolchains/rust - ensure it has rust-src too
+          if [ -d "$ANDROID_HOME/ndk/magisk/toolchains/rust" ]; then
+            echo "ONDK rust at $ANDROID_HOME/ndk/magisk/toolchains/rust"
+            ls "$ANDROID_HOME/ndk/magisk/toolchains/rust/lib/rustlib/src" 2>&1 | head -5 || true
+          fi
+          rustup show 2>&1 | head -30
 
       - name: Setup Android SDK / NDK
         shell: bash
@@ -68,6 +80,8 @@ jobs:
           ls -la "$ANDROID_HOME/ndk/magisk" | head -20
 
       - name: Build magiskboot (Android ABIs)
+        env:
+          RUSTUP_TOOLCHAIN: nightly
         shell: bash
         run: |
           cd upstream && python3 build.py -vr native magiskboot
@@ -141,6 +155,7 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
         with:
           targets: ${{ matrix.target }}
+          components: rust-src
       - name: Build host magiskboot
         shell: bash
         run: |
