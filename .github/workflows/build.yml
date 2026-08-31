@@ -44,10 +44,16 @@ jobs:
           MAGISK_REF: ${{ inputs.magisk_ref || 'master' }}
         run: |
           echo "* Cloning https://github.com/topjohnwu/Magisk.git @ $MAGISK_REF"
-          git clone --depth 1 --branch "$MAGISK_REF" https://github.com/topjohnwu/Magisk.git upstream || \
-            (git clone https://github.com/topjohnwu/Magisk.git upstream && git -C upstream checkout "$MAGISK_REF")
+          if ! git clone --depth 1 --recurse-submodules --shallow-submodules --branch "$MAGISK_REF" https://github.com/topjohnwu/Magisk.git upstream; then
+            git clone https://github.com/topjohnwu/Magisk.git upstream
+            git -C upstream checkout "$MAGISK_REF"
+            git -C upstream submodule update --init --recursive --depth 1
+          else
+            git -C upstream submodule update --init --recursive --depth 1 || true
+          fi
           echo "MAGISK_SHA=$(git -C upstream rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "Upstream: $(git -C upstream log -1 --oneline)"
+          ls upstream/native/src/external/ | head -20
 
       - name: Setup Android SDK / NDK
         shell: bash
