@@ -102,8 +102,6 @@ jobs:
             abi=$(basename "$(dirname "$f")")
             cp -v "$f" "out/magiskboot-$abi"
           done
-          # tar for convenience (single archive)
-          (cd out && tar -czvf "magiskboot-all-${{ env.MAGISK_SHA }}.tar.gz" magiskboot-*)
           ls -lh out/
           file out/*
 
@@ -133,13 +131,6 @@ jobs:
         with:
           name: magiskboot-x86_64-${{ env.MAGISK_SHA }}
           path: out/magiskboot-x86_64
-          if-no-files-found: error
-
-      - name: Upload magiskboot all (tar)
-        uses: actions/upload-artifact@v4
-        with:
-          name: magiskboot-all-${{ env.MAGISK_SHA }}
-          path: out/magiskboot-all-${{ env.MAGISK_SHA }}.tar.gz
           if-no-files-found: error
 
   # Host builds (exe / macOS) - placeholder, enable when cross verified
