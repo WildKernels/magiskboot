@@ -1,0 +1,29 @@
+# Bin
+upstream/
+out/
+native/out/
+native/libs/
+native/obj/
+/build
+/obj
+/libs
+*.o
+*.a
+
+# Git clone
+Magisk/
+
+# Env
+out/
+.sccache/
+.gradle/
+.cxx/
+.externalNativeBuild/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Artifacts
+*.zip
+*.apk

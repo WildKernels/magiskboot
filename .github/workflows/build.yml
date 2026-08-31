@@ -1,0 +1,125 @@
+name: magiskboot
+
+on:
+  schedule:
+    - cron: '0 3 * * *'  # nightly 03:00 UTC
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      magisk_ref:
+        description: 'Magisk branch/tag/SHA to build (default: master)'
+        required: false
+        default: 'master'
+      build_type:
+        description: 'Build type'
+        required: false
+        default: 'release'
+        type: choice
+        options: [release, debug]
+
+jobs:
+  build:
+    name: Build magiskboot
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Setup Rust (via ONDK toolchain, ensure cache)
+        shell: bash
+        run: |
+          rustc --version || echo "rustc missing, will be provided by ONDK"
+
+      - name: Clone upstream Magisk
+        shell: bash
+        env:
+          MAGISK_REF: ${{ inputs.magisk_ref || 'master' }}
+        run: |
+          echo "* Cloning https://github.com/topjohnwu/Magisk.git @ $MAGISK_REF"
+          git clone --depth 1 --branch "$MAGISK_REF" https://github.com/topjohnwu/Magisk.git upstream || \
+            (git clone https://github.com/topjohnwu/Magisk.git upstream && git -C upstream checkout "$MAGISK_REF")
+          echo "MAGISK_SHA=$(git -C upstream rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "Upstream: $(git -C upstream log -1 --oneline)"
+
+      - name: Setup Android SDK / NDK
+        shell: bash
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls -la "$ANDROID_HOME" || true
+          # build.py expects ANDROID_HOME/ndk/magisk ; it will download ONDK r30.1
+          python3 upstream/build.py ndk
+          ls -la "$ANDROID_HOME/ndk/magisk" | head -20
+
+      - name: Cache sccache / ccache
+        uses: actions/cache@v4
+        with:
+          path: .sccache
+          key: sccache-${{ runner.os }}-${{ hashFiles('upstream/native/**') }}
+          restore-keys: sccache-${{ runner.os }}-
+
+      - name: Build magiskboot (release)
+        if: inputs.build_type != 'debug'
+        shell: bash
+        env:
+          SCCACHE_DIR: ${{ github.workspace }}/.sccache
+        run: |
+          # use sccache if available
+          which sccache && sccache --start-server || true
+          python3 upstream/build.py -vr native magiskboot
+          sccache -s || true
+          ls -lh upstream/native/out/*/magiskboot
+
+      - name: Build magiskboot (debug)
+        if: inputs.build_type == 'debug'
+        shell: bash
+        env:
+          SCCACHE_DIR: ${{ github.workspace }}/.sccache
+        run: |
+          which sccache && sccache --start-server || true
+          python3 upstream/build.py -v native magiskboot
+          sccache -s || true
+          ls -lh upstream/native/out/*/magiskboot
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p out
+          for f in upstream/native/out/*/magiskboot; do
+            abi=$(basename "$(dirname "$f")")
+            cp -v "$f" "out/magiskboot-$abi"
+            # also stripped copy already static; keep as-is
+          done
+          # tar for convenience
+          tar -czvf "out/magiskboot-all-${{ env.MAGISK_SHA }}.tar.gz" -C out .
+          ls -lh out/
+          file out/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: magiskboot-${{ env.MAGISK_SHA }}
+          path: out/*
+          compression-level: 9
+
+  # Host builds (exe / macOS) - placeholder, enable when cross verified
+  # Uncomment to build host binaries via cargo (requires extra host toolchain)
+  # build-host:
+  #   strategy:
+  #     matrix:
+  #       os: [ubuntu-24.04, macos-14, windows-2025]
+  #   runs-on: ${{ matrix.os }}
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-python@v5
+  #       with: { python-version: '3.x' }
+  #     - uses: dtolnay/rust-toolchain@stable
+  #     - run: git clone --depth 1 https://github.com/topjohnwu/Magisk.git upstream
+  #     - run: cargo build --release --manifest-path upstream/native/src/Cargo.toml -p magiskboot
