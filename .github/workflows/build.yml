@@ -168,10 +168,25 @@ jobs:
         shell: bash
         run: |
           echo "Before patch:"; cat upstream/native/src/.cargo/config.toml
-          # Remove force-unwind-tables=no - Windows MSVC forbids disabling unwind tables
-          # GNU sed on Windows Git Bash: -i without backup
-          sed -i '/force-unwind-tables/d' upstream/native/src/.cargo/config.toml
-          echo "After patch:"; cat upstream/native/src/.cargo/config.toml
+          python3 << 'PY'
+          import pathlib, re
+          p = pathlib.Path("upstream/native/src/.cargo/config.toml")
+          t = p.read_text()
+          # Remove the pair: "-C", "force-unwind-tables=no", -> left a dangling -C
+          t = t.replace('    "-C",\n    "force-unwind-tables=no",', '')
+          # Clean any leftover orphan "-C", before ] (from previous buggy patch)
+          t = re.sub(r',\s*\n\s*"-C",\s*\n\s*\]', '\n]', t)
+          t = re.sub(r'"-C",\s*\n\s*\]', ']', t)
+          # Also strip any remaining force-unwind line if format differed
+          t = "\n".join(l for l in t.splitlines() if "force-unwind-tables" not in l)
+          # Fix double commas / trailing commas left behind
+          t = re.sub(r',\s*,', ',', t)
+          # Clean trailing comma before ] left by removal (",\n\n]" -> "\n]")
+          t = re.sub(r',\s*\n\s*\]', '\n]', t)
+          p.write_text(t)
+          print("After patch:")
+          print(p.read_text())
+          PY
       - name: Build host magiskboot
         shell: bash
         run: |
