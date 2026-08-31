@@ -62,7 +62,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .sccache
-          key: sccache-${{ runner.os }}-${{ hashFiles('upstream/native/**') }}
+          key: sccache-${{ runner.os }}-${{ github.sha }}
           restore-keys: sccache-${{ runner.os }}-
 
       - name: Build magiskboot (release)
