@@ -44,8 +44,28 @@ jobs:
           echo "MAGISK_SHA=$SHA" >> $GITHUB_ENV
           echo "Upstream: $(git -C upstream log -1 --oneline)"
 
-      - name: Setup Magisk toolchain
-        uses: ./upstream/.github/actions/setup
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Python 3
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Setup Rust nightly (Magisk needs nightly for panic-immediate-abort)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Setup Android SDK / NDK
+        shell: bash
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          cd upstream && python3 build.py ndk
+          ls -la "$ANDROID_HOME/ndk/magisk" | head -20
 
       - name: Build magiskboot (Android ABIs)
         shell: bash
@@ -117,8 +137,8 @@ jobs:
             git -C upstream submodule update --init --recursive --depth 1 || true
           fi
           echo "MAGISK_SHA=$(git -C upstream rev-parse --short HEAD)" >> $GITHUB_ENV
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
         with:
           targets: ${{ matrix.target }}
       - name: Build host magiskboot
@@ -161,16 +181,13 @@ jobs:
         run: |
           set -e
           echo "Magisk SHA: $MAGISK_SHA"
-          # Delete previous nightly release if exists, keep tag deletion to move it (single release)
           if gh release view nightly >/dev/null 2>&1; then
             echo "Deleting previous nightly release..."
             gh release delete nightly --yes --cleanup-tag || gh release delete nightly --yes || true
           fi
-          # Ensure tag is gone locally/remote before recreate
           git tag -d nightly 2>/dev/null || true
           git push origin :refs/tags/nightly 2>/dev/null || true
           ls -lh dist/
-          # Create new nightly release with tag nightly, title includes hash
           gh release create nightly \
             --title "nightly $MAGISK_SHA" \
             --notes "Automated nightly build of magiskboot from topjohnwu/Magisk @ $MAGISK_SHA
@@ -182,6 +199,5 @@ jobs:
             --target main \
             --prerelease \
             dist/*
-
           echo "Created release nightly -> $MAGISK_SHA"
           gh release view nightly --json tagName,name,url --jq '{tag, name, url}'
