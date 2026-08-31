@@ -163,6 +163,15 @@ jobs:
         with:
           targets: ${{ matrix.target }}
           components: rust-src
+      - name: Patch cargo config for Windows (MSVC requires unwind tables)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "Before patch:"; cat upstream/native/src/.cargo/config.toml
+          # Remove force-unwind-tables=no - Windows MSVC forbids disabling unwind tables
+          # GNU sed on Windows Git Bash: -i without backup
+          sed -i '/force-unwind-tables/d' upstream/native/src/.cargo/config.toml
+          echo "After patch:"; cat upstream/native/src/.cargo/config.toml
       - name: Build host magiskboot
         shell: bash
         run: |
