@@ -54,8 +54,8 @@ jobs:
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
           ls -la "$ANDROID_HOME" || true
-          # build.py expects ANDROID_HOME/ndk/magisk ; it will download ONDK r30.1
-          python3 upstream/build.py ndk
+          # build.py must run with cwd=upstream (it looks for app/gradle.properties relative to cwd)
+          cd upstream && python3 build.py ndk
           ls -la "$ANDROID_HOME/ndk/magisk" | head -20
 
       - name: Cache sccache / ccache
@@ -73,9 +73,9 @@ jobs:
         run: |
           # use sccache if available
           which sccache && sccache --start-server || true
-          python3 upstream/build.py -vr native magiskboot
+          cd upstream && python3 build.py -vr native magiskboot
           sccache -s || true
-          ls -lh upstream/native/out/*/magiskboot
+          ls -lh native/out/*/magiskboot
 
       - name: Build magiskboot (debug)
         if: inputs.build_type == 'debug'
@@ -84,9 +84,9 @@ jobs:
           SCCACHE_DIR: ${{ github.workspace }}/.sccache
         run: |
           which sccache && sccache --start-server || true
-          python3 upstream/build.py -v native magiskboot
+          cd upstream && python3 build.py -v native magiskboot
           sccache -s || true
-          ls -lh upstream/native/out/*/magiskboot
+          ls -lh native/out/*/magiskboot
 
       - name: Collect artifacts
         shell: bash
