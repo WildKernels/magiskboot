@@ -61,23 +61,30 @@ jobs:
           components: rust-src
           targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
 
-      - name: Add rust-src for ONDK toolchain
-        shell: bash
-        run: |
-          rustup component add rust-src --toolchain nightly --target x86_64-unknown-linux-gnu || true
-          # ONDK rust is at $ANDROID_HOME/ndk/magisk/toolchains/rust - ensure it has rust-src too
-          if [ -d "$ANDROID_HOME/ndk/magisk/toolchains/rust" ]; then
-            echo "ONDK rust at $ANDROID_HOME/ndk/magisk/toolchains/rust"
-            ls "$ANDROID_HOME/ndk/magisk/toolchains/rust/lib/rustlib/src" 2>&1 | head -5 || true
-          fi
-          rustup show 2>&1 | head -30
-
       - name: Setup Android SDK / NDK
         shell: bash
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
           cd upstream && python3 build.py ndk
           ls -la "$ANDROID_HOME/ndk/magisk" | head -20
+
+      - name: Fix ONDK rust-src (Magisk needs rust-src for std)
+        shell: bash
+        run: |
+          rustup component add rust-src --toolchain nightly || true
+          # ONDK rust is at $ANDROID_HOME/ndk/magisk/toolchains/rust - copy rust-src from host
+          if [ -d "$ANDROID_HOME/ndk/magisk/toolchains/rust" ]; then
+            echo "ONDK rust before:"
+            ls "$ANDROID_HOME/ndk/magisk/toolchains/rust/lib/rustlib/src" 2>&1 | head -5 || echo "no src"
+            HOST_SRC=$(rustc +nightly --print sysroot)/lib/rustlib/src
+            if [ -d "$HOST_SRC/rust" ]; then
+              echo "Copying $HOST_SRC/rust -> $ANDROID_HOME/ndk/magisk/toolchains/rust/lib/rustlib/src/rust"
+              mkdir -p "$ANDROID_HOME/ndk/magisk/toolchains/rust/lib/rustlib/src"
+              cp -r "$HOST_SRC/rust" "$ANDROID_HOME/ndk/magisk/toolchains/rust/lib/rustlib/src/" 2>&1 | head -5 || true
+              ls "$ANDROID_HOME/ndk/magisk/toolchains/rust/lib/rustlib/src" 2>&1 | head -10
+            fi
+          fi
+          rustup show 2>&1 | head -30
 
       - name: Build magiskboot (Android ABIs)
         env:
