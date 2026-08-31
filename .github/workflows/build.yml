@@ -101,10 +101,9 @@ jobs:
           for f in upstream/native/out/*/magiskboot; do
             abi=$(basename "$(dirname "$f")")
             cp -v "$f" "out/magiskboot-$abi"
-            # also stripped copy already static; keep as-is
           done
-          # tar for convenience
-          tar -czvf "out/magiskboot-all-${{ env.MAGISK_SHA }}.tar.gz" -C out .
+          # tar outside of self-reference (avoid "file changed as we read it")
+          (cd out && tar -czvf "magiskboot-all-${{ env.MAGISK_SHA }}.tar.gz" magiskboot-*)
           ls -lh out/
           file out/*
 
