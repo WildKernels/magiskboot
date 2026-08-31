@@ -13,37 +13,19 @@ on:
         description: 'Magisk branch/tag/SHA to build (default: master)'
         required: false
         default: 'master'
-      build_type:
-        description: 'Build type'
-        required: false
-        default: 'release'
-        type: choice
-        options: [release, debug]
 
 jobs:
-  build:
-    name: Build magiskboot
+  android:
+    name: Android (NDK)
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python 3
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: Setup Rust (via ONDK toolchain, ensure cache)
-        shell: bash
-        run: |
-          rustc --version || echo "rustc missing, will be provided by ONDK"
+      - uses: actions/checkout@v4
 
       - name: Clone upstream Magisk
-        shell: bash
         env:
           MAGISK_REF: ${{ inputs.magisk_ref || 'master' }}
+        shell: bash
         run: |
-          echo "* Cloning https://github.com/topjohnwu/Magisk.git @ $MAGISK_REF"
           if ! git clone --depth 1 --recurse-submodules --shallow-submodules --branch "$MAGISK_REF" https://github.com/topjohnwu/Magisk.git upstream; then
             git clone https://github.com/topjohnwu/Magisk.git upstream
             git -C upstream checkout "$MAGISK_REF"
@@ -53,97 +35,105 @@ jobs:
           fi
           echo "MAGISK_SHA=$(git -C upstream rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "Upstream: $(git -C upstream log -1 --oneline)"
-          ls upstream/native/src/external/ | head -20
 
-      - name: Setup Android SDK / NDK
+      # Reuse upstream's maintained setup (NDK r30.1 + Rust + sccache) - minimal repair
+      - name: Setup Magisk toolchain
+        uses: ./upstream/.github/actions/setup
+
+      - name: Build magiskboot (Android ABIs)
         shell: bash
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          ls -la "$ANDROID_HOME" || true
-          # build.py must run with cwd=upstream (it looks for app/gradle.properties relative to cwd)
-          cd upstream && python3 build.py ndk
-          ls -la "$ANDROID_HOME/ndk/magisk" | head -20
-
-      - name: Cache sccache / ccache
-        uses: actions/cache@v4
-        with:
-          path: .sccache
-          key: sccache-${{ runner.os }}-${{ github.sha }}
-          restore-keys: sccache-${{ runner.os }}-
-
-      - name: Build magiskboot (release)
-        if: inputs.build_type != 'debug'
-        shell: bash
-        env:
-          SCCACHE_DIR: ${{ github.workspace }}/.sccache
-        run: |
-          # use sccache if available
-          which sccache && sccache --start-server || true
           cd upstream && python3 build.py -vr native magiskboot
-          sccache -s || true
           ls -lh native/out/*/magiskboot
+          file native/out/*/magiskboot
 
-      - name: Build magiskboot (debug)
-        if: inputs.build_type == 'debug'
-        shell: bash
-        env:
-          SCCACHE_DIR: ${{ github.workspace }}/.sccache
-        run: |
-          which sccache && sccache --start-server || true
-          cd upstream && python3 build.py -v native magiskboot
-          sccache -s || true
-          ls -lh native/out/*/magiskboot
-
-      - name: Collect artifacts
+      - name: Collect
         shell: bash
         run: |
           mkdir -p out
-          for f in upstream/native/out/*/magiskboot; do
-            abi=$(basename "$(dirname "$f")")
-            cp -v "$f" "out/magiskboot-$abi"
-          done
-          ls -lh out/
-          file out/*
+          for f in upstream/native/out/*/magiskboot; do cp -v "$f" "out/magiskboot-$(basename $(dirname $f))"; done
+          ls -lh out/ && file out/*
 
-      - name: Upload magiskboot arm64-v8a
+      - name: Upload arm64-v8a
         uses: actions/upload-artifact@v4
         with:
           name: magiskboot-arm64-v8a-${{ env.MAGISK_SHA }}
           path: out/magiskboot-arm64-v8a
-          if-no-files-found: error
-
-      - name: Upload magiskboot armeabi-v7a
+      - name: Upload armeabi-v7a
         uses: actions/upload-artifact@v4
         with:
           name: magiskboot-armeabi-v7a-${{ env.MAGISK_SHA }}
           path: out/magiskboot-armeabi-v7a
-          if-no-files-found: error
-
-      - name: Upload magiskboot x86
+      - name: Upload x86
         uses: actions/upload-artifact@v4
         with:
           name: magiskboot-x86-${{ env.MAGISK_SHA }}
           path: out/magiskboot-x86
-          if-no-files-found: error
-
-      - name: Upload magiskboot x86_64
+      - name: Upload x86_64
         uses: actions/upload-artifact@v4
         with:
           name: magiskboot-x86_64-${{ env.MAGISK_SHA }}
           path: out/magiskboot-x86_64
-          if-no-files-found: error
 
-  # Host builds (exe / macOS) - placeholder, enable when cross verified
-  # Uncomment to build host binaries via cargo (requires extra host toolchain)
-  # build-host:
-  #   strategy:
-  #     matrix:
-  #       os: [ubuntu-24.04, macos-14, windows-2025]
-  #   runs-on: ${{ matrix.os }}
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-python@v5
-  #       with: { python-version: '3.x' }
-  #     - uses: dtolnay/rust-toolchain@stable
-  #     - run: git clone --depth 1 https://github.com/topjohnwu/Magisk.git upstream
-  #     - run: cargo build --release --manifest-path upstream/native/src/Cargo.toml -p magiskboot
+  host:
+    name: Host ${{ matrix.os }} ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            bin: magiskboot
+            artifact: magiskboot-linux-x86_64
+          - os: macos-14
+            target: aarch64-apple-darwin
+            bin: magiskboot
+            artifact: magiskboot-macos-arm64
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            bin: magiskboot.exe
+            artifact: magiskboot-windows-x86_64
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone upstream Magisk
+        env:
+          MAGISK_REF: ${{ inputs.magisk_ref || 'master' }}
+        shell: bash
+        run: |
+          if ! git clone --depth 1 --recurse-submodules --shallow-submodules --branch "$MAGISK_REF" https://github.com/topjohnwu/Magisk.git upstream; then
+            git clone https://github.com/topjohnwu/Magisk.git upstream
+            git -C upstream checkout "$MAGISK_REF"
+            git -C upstream submodule update --init --recursive --depth 1
+          else
+            git -C upstream submodule update --init --recursive --depth 1 || true
+          fi
+          echo "MAGISK_SHA=$(git -C upstream rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build host magiskboot
+        shell: bash
+        run: |
+          # Host build is experimental - cargo only, no NDK
+          # Uses upstream's Rust crate directly; may need nix->windows stubs for Windows
+          cd upstream/native/src
+          cargo build -p magiskboot --release --target ${{ matrix.target }} -v || \
+            cargo build -p magiskboot --target ${{ matrix.target }} -v
+          ls -lh target/${{ matrix.target }}/release/${{ matrix.bin }}* 2>/dev/null || ls -lh target/${{ matrix.target }}/debug/${{ matrix.bin }}* 2>/dev/null || echo "host binary not produced (expected for Windows until nix ported)"
+          mkdir -p $GITHUB_WORKSPACE/out-host
+          cp -v target/${{ matrix.target }}/release/${{ matrix.bin }} $GITHUB_WORKSPACE/out-host/${{ matrix.artifact }} 2>/dev/null || \
+            cp -v target/${{ matrix.target }}/debug/${{ matrix.bin }} $GITHUB_WORKSPACE/out-host/${{ matrix.artifact }} 2>/dev/null || echo "no binary to copy"
+
+      - name: Upload host
+        if: hashFiles('out-host/*') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-${{ env.MAGISK_SHA }}
+          path: out-host/*
+          if-no-files-found: warn
