@@ -102,17 +102,45 @@ jobs:
             abi=$(basename "$(dirname "$f")")
             cp -v "$f" "out/magiskboot-$abi"
           done
-          # tar outside of self-reference (avoid "file changed as we read it")
+          # tar for convenience (single archive)
           (cd out && tar -czvf "magiskboot-all-${{ env.MAGISK_SHA }}.tar.gz" magiskboot-*)
           ls -lh out/
           file out/*
 
-      - name: Upload artifacts
+      - name: Upload magiskboot arm64-v8a
         uses: actions/upload-artifact@v4
         with:
-          name: magiskboot-${{ env.MAGISK_SHA }}
-          path: out/*
-          compression-level: 9
+          name: magiskboot-arm64-v8a-${{ env.MAGISK_SHA }}
+          path: out/magiskboot-arm64-v8a
+          if-no-files-found: error
+
+      - name: Upload magiskboot armeabi-v7a
+        uses: actions/upload-artifact@v4
+        with:
+          name: magiskboot-armeabi-v7a-${{ env.MAGISK_SHA }}
+          path: out/magiskboot-armeabi-v7a
+          if-no-files-found: error
+
+      - name: Upload magiskboot x86
+        uses: actions/upload-artifact@v4
+        with:
+          name: magiskboot-x86-${{ env.MAGISK_SHA }}
+          path: out/magiskboot-x86
+          if-no-files-found: error
+
+      - name: Upload magiskboot x86_64
+        uses: actions/upload-artifact@v4
+        with:
+          name: magiskboot-x86_64-${{ env.MAGISK_SHA }}
+          path: out/magiskboot-x86_64
+          if-no-files-found: error
+
+      - name: Upload magiskboot all (tar)
+        uses: actions/upload-artifact@v4
+        with:
+          name: magiskboot-all-${{ env.MAGISK_SHA }}
+          path: out/magiskboot-all-${{ env.MAGISK_SHA }}.tar.gz
+          if-no-files-found: error
 
   # Host builds (exe / macOS) - placeholder, enable when cross verified
   # Uncomment to build host binaries via cargo (requires extra host toolchain)
