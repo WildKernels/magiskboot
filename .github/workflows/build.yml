@@ -14,14 +14,20 @@ on:
         required: false
         default: 'master'
 
+permissions:
+  contents: write
+
 jobs:
   android:
     name: Android (NDK)
     runs-on: ubuntu-24.04
+    outputs:
+      magisk_sha: ${{ steps.clone.outputs.magisk_sha }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Clone upstream Magisk
+        id: clone
         env:
           MAGISK_REF: ${{ inputs.magisk_ref || 'master' }}
         shell: bash
@@ -33,10 +39,11 @@ jobs:
           else
             git -C upstream submodule update --init --recursive --depth 1 || true
           fi
-          echo "MAGISK_SHA=$(git -C upstream rev-parse --short HEAD)" >> $GITHUB_ENV
+          SHA=$(git -C upstream rev-parse --short HEAD)
+          echo "magisk_sha=$SHA" >> $GITHUB_OUTPUT
+          echo "MAGISK_SHA=$SHA" >> $GITHUB_ENV
           echo "Upstream: $(git -C upstream log -1 --oneline)"
 
-      # Reuse upstream's maintained setup (NDK r30.1 + Rust + sccache) - minimal repair
       - name: Setup Magisk toolchain
         uses: ./upstream/.github/actions/setup
 
@@ -57,22 +64,22 @@ jobs:
       - name: Upload arm64-v8a
         uses: actions/upload-artifact@v4
         with:
-          name: magiskboot-arm64-v8a-${{ env.MAGISK_SHA }}
+          name: magiskboot-arm64-v8a-${{ steps.clone.outputs.magisk_sha }}
           path: out/magiskboot-arm64-v8a
       - name: Upload armeabi-v7a
         uses: actions/upload-artifact@v4
         with:
-          name: magiskboot-armeabi-v7a-${{ env.MAGISK_SHA }}
+          name: magiskboot-armeabi-v7a-${{ steps.clone.outputs.magisk_sha }}
           path: out/magiskboot-armeabi-v7a
       - name: Upload x86
         uses: actions/upload-artifact@v4
         with:
-          name: magiskboot-x86-${{ env.MAGISK_SHA }}
+          name: magiskboot-x86-${{ steps.clone.outputs.magisk_sha }}
           path: out/magiskboot-x86
       - name: Upload x86_64
         uses: actions/upload-artifact@v4
         with:
-          name: magiskboot-x86_64-${{ env.MAGISK_SHA }}
+          name: magiskboot-x86_64-${{ steps.clone.outputs.magisk_sha }}
           path: out/magiskboot-x86_64
 
   host:
@@ -97,7 +104,6 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-
       - name: Clone upstream Magisk
         env:
           MAGISK_REF: ${{ inputs.magisk_ref || 'master' }}
@@ -111,25 +117,18 @@ jobs:
             git -C upstream submodule update --init --recursive --depth 1 || true
           fi
           echo "MAGISK_SHA=$(git -C upstream rev-parse --short HEAD)" >> $GITHUB_ENV
-
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
       - name: Build host magiskboot
         shell: bash
         run: |
-          # Host build is experimental - cargo only, no NDK
-          # Uses upstream's Rust crate directly; may need nix->windows stubs for Windows
           cd upstream/native/src
-          cargo build -p magiskboot --release --target ${{ matrix.target }} -v || \
-            cargo build -p magiskboot --target ${{ matrix.target }} -v
+          cargo build -p magiskboot --release --target ${{ matrix.target }} -v || cargo build -p magiskboot --target ${{ matrix.target }} -v
           ls -lh target/${{ matrix.target }}/release/${{ matrix.bin }}* 2>/dev/null || ls -lh target/${{ matrix.target }}/debug/${{ matrix.bin }}* 2>/dev/null || echo "host binary not produced (expected for Windows until nix ported)"
           mkdir -p $GITHUB_WORKSPACE/out-host
-          cp -v target/${{ matrix.target }}/release/${{ matrix.bin }} $GITHUB_WORKSPACE/out-host/${{ matrix.artifact }} 2>/dev/null || \
-            cp -v target/${{ matrix.target }}/debug/${{ matrix.bin }} $GITHUB_WORKSPACE/out-host/${{ matrix.artifact }} 2>/dev/null || echo "no binary to copy"
-
+          cp -v target/${{ matrix.target }}/release/${{ matrix.bin }} $GITHUB_WORKSPACE/out-host/${{ matrix.artifact }} 2>/dev/null || cp -v target/${{ matrix.target }}/debug/${{ matrix.bin }} $GITHUB_WORKSPACE/out-host/${{ matrix.artifact }} 2>/dev/null || echo "no binary to copy"
       - name: Upload host
         if: hashFiles('out-host/*') != ''
         uses: actions/upload-artifact@v4
@@ -137,3 +136,52 @@ jobs:
           name: ${{ matrix.artifact }}-${{ env.MAGISK_SHA }}
           path: out-host/*
           if-no-files-found: warn
+
+  release:
+    name: Release nightly (single)
+    needs: android
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: magiskboot-*
+          merge-multiple: true
+      - name: List artifacts
+        shell: bash
+        run: ls -R dist 2>&1 | head -100; ls -lh dist/ 2>&1 | head -20
+      - name: Create/Update nightly release (single release, hash in notes)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAGISK_SHA: ${{ needs.android.outputs.magisk_sha }}
+        shell: bash
+        run: |
+          set -e
+          echo "Magisk SHA: $MAGISK_SHA"
+          # Delete previous nightly release if exists, keep tag deletion to move it (single release)
+          if gh release view nightly >/dev/null 2>&1; then
+            echo "Deleting previous nightly release..."
+            gh release delete nightly --yes --cleanup-tag || gh release delete nightly --yes || true
+          fi
+          # Ensure tag is gone locally/remote before recreate
+          git tag -d nightly 2>/dev/null || true
+          git push origin :refs/tags/nightly 2>/dev/null || true
+          ls -lh dist/
+          # Create new nightly release with tag nightly, title includes hash
+          gh release create nightly \
+            --title "nightly $MAGISK_SHA" \
+            --notes "Automated nightly build of magiskboot from topjohnwu/Magisk @ $MAGISK_SHA
+
+          Built Android ABIs: arm64-v8a, armeabi-v7a, x86, x86_64 (static ELF)
+          Host artifacts (if built): linux-x86_64, macos-arm64, windows-x86_64.exe (best-effort)
+
+          Upstream: https://github.com/topjohnwu/Magisk/commit/$MAGISK_SHA" \
+            --target main \
+            --prerelease \
+            dist/*
+
+          echo "Created release nightly -> $MAGISK_SHA"
+          gh release view nightly --json tagName,name,url --jq '{tag, name, url}'
