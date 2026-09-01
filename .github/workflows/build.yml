@@ -44,32 +44,39 @@ jobs:
           echo "MAGISK_SHA=$SHA" >> $GITHUB_ENV
           echo "Upstream: $(git -C upstream log -1 --oneline)"
 
-      - name: Setup Java 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-
       - name: Setup Python 3
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
+      - name: Setup Rust (via ONDK toolchain, ensure cache)
+        shell: bash
+        run: |
+          rustc --version || echo "rustc missing, will be provided by ONDK"
+
       - name: Setup Android SDK / NDK
         shell: bash
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
-          which rustup && rustup --version || echo "no rustup"
+          ls -la "$ANDROID_HOME" || true
           cd upstream && python3 build.py ndk
-          ls -la "$ANDROID_HOME/ndk/magisk/toolchains/rust" | head -20
-          ls "$ANDROID_HOME/ndk/magisk/toolchains/rust/lib/rustlib/src" 2>&1 | head -10 || true
-          # ONDK rustc version (should be nightly matching its own src)
-          "$ANDROID_HOME/ndk/magisk/toolchains/rust/bin/rustc" --version 2>&1 | head -5 || true
+          ls -la "$ANDROID_HOME/ndk/magisk" | head -20
+
+      - name: Cache sccache / ccache
+        uses: actions/cache@v4
+        with:
+          path: .sccache
+          key: sccache-${{ runner.os }}-${{ github.sha }}
+          restore-keys: sccache-${{ runner.os }}-
 
       - name: Build magiskboot (Android ABIs)
         shell: bash
+        env:
+          SCCACHE_DIR: ${{ github.workspace }}/.sccache
         run: |
+          which sccache && sccache --start-server || true
           cd upstream && python3 build.py -vr native magiskboot
+          sccache -s || true
           ls -lh native/out/*/magiskboot
           file native/out/*/magiskboot
 
@@ -150,16 +157,11 @@ jobs:
           import pathlib, re
           p = pathlib.Path("upstream/native/src/.cargo/config.toml")
           t = p.read_text()
-          # Remove the pair: "-C", "force-unwind-tables=no", -> left a dangling -C
           t = t.replace('    "-C",\n    "force-unwind-tables=no",', '')
-          # Clean any leftover orphan "-C", before ] (from previous buggy patch)
           t = re.sub(r',\s*\n\s*"-C",\s*\n\s*\]', '\n]', t)
           t = re.sub(r'"-C",\s*\n\s*\]', ']', t)
-          # Also strip any remaining force-unwind line if format differed
           t = "\n".join(l for l in t.splitlines() if "force-unwind-tables" not in l)
-          # Fix double commas / trailing commas left behind
           t = re.sub(r',\s*,', ',', t)
-          # Clean trailing comma before ] left by removal (",\n\n]" -> "\n]")
           t = re.sub(r',\s*\n\s*\]', '\n]', t)
           p.write_text(t)
           print("After patch:")
@@ -216,12 +218,5 @@ jobs:
             --title "nightly $MAGISK_SHA" \
             --notes "Automated nightly build of magiskboot from topjohnwu/Magisk @ $MAGISK_SHA
 
-          Built Android ABIs: arm64-v8a, armeabi-v7a, x86, x86_64 (static ELF)
-          Host artifacts (if built): linux-x86_64, macos-arm64, windows-x86_64.exe (best-effort)
-
-          Upstream: https://github.com/topjohnwu/Magisk/commit/$MAGISK_SHA" \
-            --target main \
-            --prerelease \
-            dist/*
-          echo "Created release nightly -> $MAGISK_SHA"
-          gh release view nightly --json tagName,name,url --jq '{tag, name, url}'
+          Built Android ABIs: arm64-v8a, armeabi-v7a, x86, x86_64 (static ELF)" \
+            dist/* || gh release create nightly --title "nightly $MAGISK_SHA" --notes "nightly $MAGISK_SHA" dist/magiskboot-*
